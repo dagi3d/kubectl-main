@@ -1,0 +1,60 @@
+#!/usr/bin/env ruby
+require 'optparse'
+require 'json'
+require 'base64'
+require 'byebug'
+
+options = {
+  env: 'default'
+}
+
+def exec(cmd, print_response: true)
+  `#{cmd}`.tap do |response|
+    puts response if print_response
+  end
+end
+
+def restart(options)
+  cmd = "kubectl rollout restart --namespace=#{options[:env]} deployment/#{options[:app]}"
+  exec(cmd)
+end
+
+def config_get(options)
+  cmd = "kubectl get secret --namespace=#{options[:env]} #{options[:app]} -o jsonpath='{.data}'";
+  response = exec(cmd, print_response: false)
+  JSON.parse(response).each do |var, value|
+    puts "#{var}=#{Base64.decode64(value)}"
+  end
+end
+
+def config_set(vars, options)
+  cmd = "kubectl create secret generic --namespace=#{options[:env]} #{options[:app]}"
+  exec(cmd, print_response: false)
+
+  vars.each do |var|
+    var, value = var.split('=')
+    cmd = <<-CMD
+      kubectl patch secret --namespace=#{options[:env]} #{options[:app]} \
+        -p="{\\"data\\":{\\"#{var}\\": \\"#{Base64.strict_encode64(value)}\\"}}"
+    CMD
+    exec(cmd)
+  end
+  restart(options)
+end
+
+OptionParser.new do |opts|
+  opts.banner = <<-BANNER
+    Usage:
+      config:set FOO=BAR APP_ENV=staging
+      config:get
+  BANNER
+  opts.on("-a APP", "--app=APP") { |app| options[:app] = app }
+  opts.on("-e ENV", "--environment=ENV") { |env| options[:env] = env }
+end.parse!(into: options)
+
+cmd = ARGV[0]
+
+case cmd
+when 'config:get' then config_get(options)
+when 'config:set' then config_set(ARGV[1..-1], options)
+end
